@@ -690,4 +690,28 @@ class GattDefs {
     final key = uuid.toLowerCase();
     return characteristics[key] ?? "";
   }
+
+  // ===========================
+  // Security heuristics helpers
+  // ===========================
+  static const Set<String> writableInfoCharacteristics = {
+    '00002a00-0000-1000-8000-00805f9b34fb', // Device Name
+    '00002a52-0000-1000-8000-00805f9b34fb', // Glucose Control Point
+    '00002a4d-0000-1000-8000-00805f9b34fb', // HID Control Point
+    '00002a66-0000-1000-8000-00805f9b34fb', // Cycling Power Control Point
+    '00002ad9-0000-1000-8000-00805f9b34fb', // Control Point (various)
+  };
+
+  static const Set<String> dataNotificationCharacteristics = {
+    '00002a37-0000-1000-8000-00805f9b34fb', // Heart Rate Measurement
+    '00002a18-0000-1000-8000-00805f9b34fb', // Blood Pressure Measurement
+    '00002a19-0000-1000-8000-00805f9b34fb', // Battery Level
+    '00002a63-0000-1000-8000-00805f9b34fb', // Cycling Power Measurement
+  };
+
+  static const Set<String> fragileWriteCharacteristics = {
+    '00002a67-0000-1000-8000-00805f9b34fb', // Location and Speed
+    '00002a68-0000-1000-8000-00805f9b34fb', // Navigation
+    '00001532-1212-efde-1523-785feabcd123', // DFU control (Nordic)
+  };
 }
