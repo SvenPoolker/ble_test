@@ -53,6 +53,35 @@ class _BleDevicePageState extends State<BleDevicePage> {
 
   String _charKey(Uuid serviceId, Uuid charId) => "${serviceId.toString()}|${charId.toString()}";
 
+  List<String> _computeVulnHeuristics(
+    DiscoveredService service,
+    DiscoveredCharacteristic charac,
+  ) {
+    final uuid = charac.characteristicId.toString().toLowerCase();
+    final isWritable = charac.isWritableWithResponse || charac.isWritableWithoutResponse;
+    final reasons = <String>[];
+
+    if (isWritable && GattDefs.writableInfoCharacteristics.contains(uuid)) {
+      reasons.add('Characteristic writable sans auth détectée');
+    }
+
+    if (charac.isNotifiable &&
+        GattDefs.dataNotificationCharacteristics.contains(uuid)) {
+      reasons.add('Notify actif sans encryption apparente');
+    }
+
+    if (charac.isWritableWithoutResponse &&
+        GattDefs.writableInfoCharacteristics.contains(uuid)) {
+      reasons.add('Write without response sur char sensible');
+    }
+
+    if (isWritable && GattDefs.fragileWriteCharacteristics.contains(uuid)) {
+      reasons.add('Payload long/invalid pourrait faire crasher le device');
+    }
+
+    return reasons;
+  }
+
   Future<void> _onConnectPressed() async {
     await _connectionSub?.cancel();
 
@@ -860,6 +889,7 @@ Widget _buildCharacteristicTile(
   final key = _charKey(service.serviceId, charac.characteristicId);
   final notified = _notifySubs.containsKey(key);
   final last = _lastNotifiedValue[key];
+  final vulnReasons = _computeVulnHeuristics(service, charac);
 
   final charUuid = charac.characteristicId.toString();
   final charName = GattDefs.characteristicName(charUuid);
@@ -913,6 +943,13 @@ Widget _buildCharacteristicTile(
                     visualDensity: VisualDensity.compact,
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
+                if (vulnReasons.isNotEmpty)
+                  Chip(
+                    label: const Text('⚠️ potentially vulnerable'),
+                    backgroundColor: Colors.orange.shade100,
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
               ],
             ),
           ],
@@ -954,6 +991,18 @@ Widget _buildCharacteristicTile(
               Text("Hex: $lastHex"),
               Text("ASCII: $lastAscii"),
             ],
+          ),
+        ),
+      if (vulnReasons.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(left: 16.0, bottom: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: vulnReasons
+                .map(
+                  (reason) => Text('• $reason'),
+                )
+                .toList(),
           ),
         ),
       const Divider(height: 1),
