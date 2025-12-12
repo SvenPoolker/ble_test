@@ -28,6 +28,7 @@ class _BleDevicePageState extends State<BleDevicePage> {
   StreamSubscription<ConnectionStateUpdate>? _connectionSub;
 
   String _connectionStatus = "Non connecté";
+  DeviceConnectionState? _lastConnectionState;
   List<DiscoveredService> _discoveredServices = [];
   String? _deviceNameValue;
   final Map<String, StreamSubscription<List<int>>> _notifySubs = {};
@@ -101,6 +102,7 @@ class _BleDevicePageState extends State<BleDevicePage> {
       setState(() {
         _connectionStatus = event.connectionState.toString();
       });
+      _lastConnectionState = event.connectionState;
 
       if (event.connectionState == DeviceConnectionState.connected) {
         try {
@@ -157,6 +159,7 @@ class _BleDevicePageState extends State<BleDevicePage> {
     );
     setState(() {
       _connectionStatus = "Déconnecté";
+      _lastConnectionState = DeviceConnectionState.disconnected;
       _discoveredServices = [];
       _deviceNameValue = null;
     });
@@ -592,6 +595,14 @@ Future<void> _showFuzzDialog() async {
   int minVal = 0x00;
   int maxVal = 0xFF;
   int delayMs = 50;
+  bool useBoundaryValues = true;
+  bool useBitFlips = true;
+  bool testPayloadSizes = true;
+  bool stopOnDisconnect = true;
+  bool stopOnNotifyAnomaly = true;
+  bool stopOnTimeout = true;
+  bool autoReplayLastValid = true;
+  int timeoutMs = 500;
 
   await showDialog(
     context: context,
@@ -669,6 +680,65 @@ Future<void> _showFuzzDialog() async {
                     }
                   },
                 ),
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  value: useBoundaryValues,
+                  dense: true,
+                  title: const Text("Boundary values (0x00, 0x7F, 0xFF)"),
+                  onChanged: (v) => setState(() => useBoundaryValues = v),
+                ),
+                SwitchListTile(
+                  value: useBitFlips,
+                  dense: true,
+                  title: const Text("Bit flip (1-bit mutations)"),
+                  onChanged: (v) => setState(() => useBitFlips = v),
+                ),
+                SwitchListTile(
+                  value: testPayloadSizes,
+                  dense: true,
+                  title: const Text("Payload trop long / trop court"),
+                  onChanged: (v) => setState(() => testPayloadSizes = v),
+                ),
+                const Divider(height: 20),
+                SwitchListTile(
+                  value: stopOnDisconnect,
+                  dense: true,
+                  title: const Text("Stop si déconnexion"),
+                  onChanged: (v) => setState(() => stopOnDisconnect = v),
+                ),
+                SwitchListTile(
+                  value: stopOnNotifyAnomaly,
+                  dense: true,
+                  title: const Text("Stop si notify incohérente"),
+                  onChanged: (v) => setState(() => stopOnNotifyAnomaly = v),
+                ),
+                SwitchListTile(
+                  value: stopOnTimeout,
+                  dense: true,
+                  title: const Text("Stop sur timeout écriture"),
+                  onChanged: (v) => setState(() => stopOnTimeout = v),
+                ),
+                if (stopOnTimeout)
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: "Timeout écriture (ms)",
+                    ),
+                    keyboardType: TextInputType.number,
+                    onChanged: (v) {
+                      final parsed = int.tryParse(v);
+                      if (parsed != null && parsed > 0) {
+                        setState(() {
+                          timeoutMs = parsed;
+                        });
+                      }
+                    },
+                  ),
+                SwitchListTile(
+                  value: autoReplayLastValid,
+                  dense: true,
+                  title: const Text("Auto replay last valid state"),
+                  onChanged: (v) => setState(() => autoReplayLastValid = v),
+                ),
               ],
             ),
             actions: [
@@ -685,6 +755,14 @@ Future<void> _showFuzzDialog() async {
                     minVal: minVal,
                     maxVal: maxVal,
                     delayMs: delayMs,
+                    useBoundaryValues: useBoundaryValues,
+                    useBitFlips: useBitFlips,
+                    testPayloadSizes: testPayloadSizes,
+                    stopOnDisconnect: stopOnDisconnect,
+                    stopOnNotifyAnomaly: stopOnNotifyAnomaly,
+                    stopOnTimeout: stopOnTimeout,
+                    timeoutMs: timeoutMs,
+                    autoReplayLastValid: autoReplayLastValid,
                   );
                 },
                 child: const Text("Lancer"),
@@ -703,6 +781,14 @@ Future<void> _runFuzz({
   required int minVal,
   required int maxVal,
   required int delayMs,
+  bool useBoundaryValues = true,
+  bool useBitFlips = true,
+  bool testPayloadSizes = true,
+  bool stopOnDisconnect = true,
+  bool stopOnNotifyAnomaly = true,
+  bool stopOnTimeout = true,
+  int timeoutMs = 500,
+  bool autoReplayLastValid = true,
 }) async {
   if (minVal > maxVal) {
     final tmp = minVal;
@@ -711,6 +797,23 @@ Future<void> _runFuzz({
   }
 
   final base = List<int>.from(step.value);
+  final targetKey = _charKey(step.serviceId, step.characteristicId);
+  List<int>? lastValidNotify = _lastNotifiedValue[targetKey];
+  List<int>? lastValidPayload;
+
+  bool isDisconnected(DeviceConnectionState? state) {
+    return state == null ||
+        state == DeviceConnectionState.disconnected ||
+        state == DeviceConnectionState.disconnecting;
+  }
+
+  bool notifyLooksIncoherent(List<int>? before, List<int>? after) {
+    if (before == null) return false;
+    if (after == null) return true;
+    if (after.isEmpty) return true;
+    final lenDiff = (after.length - before.length).abs();
+    return lenDiff > 8;
+  }
 
   if (byteIndex < 0 || byteIndex >= base.length) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -727,27 +830,84 @@ Future<void> _runFuzz({
     ),
   );
 
+  final payloads = <List<int>>[];
+  void addPayload(List<int> payload) {
+    payloads.add(List<int>.from(payload));
+  }
+
   for (var b = minVal; b <= maxVal; b++) {
     final mutated = List<int>.from(base);
     mutated[byteIndex] = b;
+    addPayload(mutated);
+  }
 
+  if (useBoundaryValues) {
+    for (final boundary in [0x00, 0x7F, 0x80, 0xFF]) {
+      final mutated = List<int>.from(base);
+      mutated[byteIndex] = boundary.clamp(0, 0xFF).toInt();
+      addPayload(mutated);
+    }
+  }
+
+  if (useBitFlips) {
+    for (final mask in [1, 2, 4, 8, 16, 32, 64, 128]) {
+      final mutated = List<int>.from(base);
+      mutated[byteIndex] = (base[byteIndex] ^ mask) & 0xFF;
+      addPayload(mutated);
+    }
+  }
+
+  if (testPayloadSizes) {
+    if (base.length > 1) {
+      addPayload(base.sublist(0, base.length - 1));
+    }
+    addPayload([...base, 0x00]);
+    addPayload([...base, 0xFF, 0xFF]);
+  }
+
+  final uniquePayloads = <String, List<int>>{};
+  for (final payload in payloads) {
+    uniquePayloads[payload.join(',')] = payload;
+  }
+
+  String? stopReason;
+
+  for (final mutated in uniquePayloads.values) {
     try {
-      await widget.ble.writeRawCharacteristic(
+      final writeFuture = widget.ble.writeRawCharacteristic(
         deviceId: widget.device.id,
         serviceId: step.serviceId,
         characteristicId: step.characteristicId,
         value: mutated,
         withResponse: true,
       );
+
+      if (stopOnTimeout) {
+        await writeFuture.timeout(Duration(milliseconds: timeoutMs));
+      } else {
+        await writeFuture;
+      }
+
+      lastValidPayload = mutated;
+    } on TimeoutException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Timeout fuzz: $e"),
+        ),
+      );
+      stopReason = "timeout";
+      break;
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            "Erreur fuzz à 0x${b.toRadixString(16)}: $e",
+            "Erreur fuzz avec payload ${mutated.length} bytes: $e",
           ),
         ),
       );
+      stopReason = "exception";
       break;
     }
 
@@ -756,11 +916,46 @@ Future<void> _runFuzz({
     }
 
     if (!mounted) return;
+
+    if (stopOnDisconnect && isDisconnected(_lastConnectionState)) {
+      stopReason = "device disconnect";
+      break;
+    }
+
+    if (stopOnNotifyAnomaly) {
+      final newNotify = _lastNotifiedValue[targetKey];
+      if (notifyLooksIncoherent(lastValidNotify, newNotify)) {
+        stopReason = "notify incohérente";
+        break;
+      }
+      if (newNotify != null) {
+        lastValidNotify = newNotify;
+      }
+    }
   }
 
   if (!mounted) return;
+
+  if (autoReplayLastValid && stopReason != null && lastValidPayload != null) {
+    try {
+      await widget.ble.writeRawCharacteristic(
+        deviceId: widget.device.id,
+        serviceId: step.serviceId,
+        characteristicId: step.characteristicId,
+        value: lastValidPayload!,
+        withResponse: true,
+      );
+    } catch (_) {
+      // Ignore replay errors
+    }
+  }
+
+  final message = stopReason == null
+      ? "Fuzz terminé."
+      : "Fuzz stoppé (${stopReason}).";
+
   ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(content: Text("Fuzz terminé.")),
+    SnackBar(content: Text(message)),
   );
 }
 
