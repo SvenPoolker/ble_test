@@ -1,8 +1,6 @@
 import 'package:firsdt_app/ble/log/ble_log_state.dart';
 import 'package:firsdt_app/ble/pages/ble_log_page.dart';
-import 'package:firsdt_app/ble/pages/ble_playbook_page.dart';
 import 'package:firsdt_app/ble/pages/ble_scan_page.dart';
-import 'package:firsdt_app/ble/playbooks/ble_playbook_state.dart';
 import 'package:firsdt_app/ble/scripts/ble_script_state.dart';
 import 'package:firsdt_app/core/theme/theme_state.dart';
 import 'package:firsdt_app/features/items/pages/list_page.dart';
@@ -24,7 +22,6 @@ void main() async {
         ChangeNotifierProvider(create: (_) => BleLogState()),
         ChangeNotifierProvider(create: (_) => ThemeState()),
         ChangeNotifierProvider(create: (_) => BleScriptState()),
-        ChangeNotifierProvider(create: (_) => BlePlaybookState()),
       ],
       child: const MyApp(),
     ),
@@ -128,8 +125,6 @@ class _MyHomePageState extends State<MyHomePage> {
       case 2:
         return const BleScanPage();
       case 3:
-        return const BlePlaybookPage();
-      case 4:
         return const BleLogPage();
       default:
         return _buildHomeTab();
@@ -188,11 +183,6 @@ class _MyHomePageState extends State<MyHomePage> {
             icon: Icon(Icons.bluetooth_searching_outlined),
             selectedIcon: Icon(Icons.bluetooth_searching),
             label: 'Scan BLE',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.play_circle_outline),
-            selectedIcon: Icon(Icons.play_circle_fill),
-            label: 'Playbooks',
           ),
           NavigationDestination(
             icon: Icon(Icons.terminal_outlined),
